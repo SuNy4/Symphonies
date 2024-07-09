@@ -1,5 +1,6 @@
 # Init Datasloader
 from nuscenes import NuScenes as nusc
+from nuscenes.utils import splits
 import glob
 import os.path as osp
 import numpy as np
@@ -21,9 +22,9 @@ version = "v1.0-trainval"
 cam_list = ['CAM_FRONT', 'CAM_FRONT_LEFT', 'CAM_FRONT_RIGHT', 'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT']
 
 NUSPLITS = {
-    'train': ('scene-0001', 'scene-0002'),
-    'val': (),
-    'test': (),
+    'train': splits.train,
+    'val': splits.val,
+    'test': splits.test,
     }
 
 NUSCENES = nusc(version=version, dataroot='./data/nuscenes', verbose=True)
