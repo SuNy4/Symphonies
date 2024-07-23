@@ -6,7 +6,7 @@ def ce_ssc_loss(pred, target):
     return F.cross_entropy(
         pred['ssc_logits'].float(),
         target['target'].long(),
-        weight=target['class_weights'].float(),
+        #weight=target['class_weights'].float(),
         ignore_index=255,
         reduction='mean',
     )

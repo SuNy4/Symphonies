@@ -60,11 +60,11 @@ class Occ3D(Dataset):
         # self.context_prior = context_prior
         self.flip = flip
         self.load_pose = load_pose
-        self.num_classes = 18
+        self.num_classes = 17
 
-        self.voxel_origin = np.array((-2, -40, -40))
+        self.voxel_origin = np.array((-40, -40, 0))
         self.voxel_size = 0.4
-        self.scene_size = (6.4, 80, 80)
+        self.scene_size = (80, 80, 6.4)
         self.img_shape = (1600, 900)
 
         self.scans = []
@@ -161,7 +161,7 @@ class Occ3D(Dataset):
             gt = target['semantics']
             if flip:
                 gt = np.flip(gt, axis=1).copy()
-            gt[gt == 17] = 0
+            gt[gt == 17] = 255
             gt = gt * mask_camera
             label['mask_camera'] = mask_camera
             label['target'] = gt
