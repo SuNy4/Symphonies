@@ -1,19 +1,20 @@
+# @package _global_
 
 data:
   datasets:
     type: Occ3D
-    splits: [train, val, test]
+    splits: [train, val]
     data_root: './data/nuscenes'
     frustum_size: 8
   loader:
-    batch_size: 16
+    batch_size: 2
     num_workers: 4
 
 model:
   channels: 64
-  scene_size: [200, 200, 16] # Height, Width, Depth
+  scene_size: [200, 200, 16] # Depth, Width, Height
   downsample_z: 1
-  image_shape: (900, 1600)
+  image_shape: [900, 1600]
   voxel_size: 0.4
   volume_scale: 2
   num_classes: 17
