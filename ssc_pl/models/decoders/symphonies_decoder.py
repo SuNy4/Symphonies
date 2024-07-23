@@ -49,9 +49,17 @@ class SymphoniesLayer(nn.Module):
                 ref_3d=None,
                 ref_vox=None,
                 fov_mask=None):
-        scene_embed_fov = flatten_fov_from_voxels(scene_embed, fov_mask)
-        scene_pos_fov = flatten_fov_from_voxels(scene_pos,
-                                                fov_mask) if scene_pos is not None else None
+        ncam = fov_mask.shape[1]
+
+        if ncam > 1:
+            scene_embed_fov = scene_embed.flatten(2).transpose(1, 2) # flatten_fov_from_voxels(scene_embed, fov_mask)
+            scene_pos_fov = scene_pos.flatten(2).transpose(1, 2) # flatten_fov_from_voxels(scene_pos,
+                        #                         fov_mask) if scene_pos is not None else None
+        else:
+            scene_embed_fov = flatten_fov_from_voxels(scene_embed, fov_mask)
+            scene_pos_fov = flatten_fov_from_voxels(scene_pos,
+                                                    fov_mask) if scene_pos is not None else None
+            
         scene_embed_flatten, scene_shape = flatten_multi_scale_feats([scene_embed])
         scene_level_index = get_level_start_index(scene_shape)
 
@@ -65,18 +73,33 @@ class SymphoniesLayer(nn.Module):
             ref_pts=ref_2d,
             spatial_shapes=feat_shapes,
             level_start_index=feats_level_index)
+        
+        # Reshape instance quries bs, ncam*# of queries, embed_dim
+        if ncam > 1:
+            n_inst_que = inst_queries.shape[-2]
+            inst_queries = inst_queries.reshape(-1, ncam*n_inst_que, inst_queries.shape[-1])
+            if inst_pos != None:
+                inst_pos = inst_pos.reshape(-1, ncam*n_inst_que, inst_pos.shape[-1])
 
         scene_embed_fov = self.scene_query_cross_attn(scene_embed_fov, inst_queries, inst_queries,
                                                       scene_pos_fov, inst_pos)
+        
+        if ncam == 1:
+            ref_vox = ref_vox[:, fov_mask.squeeze()]
         scene_embed_fov = self.scene_self_deform_attn(
             scene_embed_fov,
             scene_embed_flatten,
             query_pos=scene_pos_fov,
-            ref_pts=torch.flip(ref_vox[:, fov_mask.squeeze()], dims=[-1]),  # TODO: assert bs == 1
+            ref_pts=torch.flip(ref_vox, dims=[-1]),  # TODO: assert bs == 1
             spatial_shapes=scene_shape,
             level_start_index=scene_level_index)
+        
+        # bs, x*y*z, embed_dim -> bs, embed_dim, x*y*z -> bs, embed_dim, x, y, z
+        if ncam > 1:
+            scene_embed = scene_embed_fov.transpose(1, 2).reshape(*scene_embed.shape)
+        else:
+            scene_embed = index_fov_back_to_voxels(scene_embed, scene_embed_fov, fov_mask)
 
-        scene_embed = index_fov_back_to_voxels(scene_embed, scene_embed_fov, fov_mask)
         scene_embed_flatten, scene_shape = flatten_multi_scale_feats([scene_embed])
         if not self.query_update:
             return scene_embed, inst_queries
@@ -89,6 +112,13 @@ class SymphoniesLayer(nn.Module):
             spatial_shapes=scene_shape,
             level_start_index=scene_level_index)
         inst_queries = self.query_self_attn(inst_queries, query_pos=inst_pos)
+        
+        # Reshape instance quries bs*ncam, # of queries, embed_dim
+        if ncam > 1:
+            inst_queries = inst_queries.reshape(-1, n_inst_que, inst_queries.shape[-1])
+            if inst_pos != None:
+                inst_pos = inst_pos.reshape(-1, n_inst_que, inst_pos.shape[-1])
+
         return scene_embed, inst_queries
 
 
@@ -125,7 +155,7 @@ class SymphoniesDecoder(nn.Module):
         ])
 
         self.scene_embed = nn.Embedding(self.num_queries, embed_dims)
-        self.scene_pos = LearnableSqueezePositionalEncoding((128, 128, 2),
+        self.scene_pos = LearnableSqueezePositionalEncoding((100, 100, 2),
                                                             embed_dims,
                                                             squeeze_dims=(2, 2, 1))
 
@@ -155,10 +185,11 @@ class SymphoniesDecoder(nn.Module):
 
     @autocast(dtype=torch.float32)
     def forward(self, pred_insts, feats, pred_masks, depth, K, E, voxel_origin, projected_pix,
-                fov_mask):
+                fov_mask, ncam):
+
         inst_queries = pred_insts['queries']  # bs, n, c
         inst_pos = pred_insts.get('query_pos', None)
-        bs = inst_queries.shape[0]
+        bs = int(inst_queries.shape[0] / ncam)
 
         if self.downsample_z != 1:
             projected_pix = interpolate_flatten(
@@ -173,20 +204,24 @@ class SymphoniesDecoder(nn.Module):
             voxel_origin,
             self.voxel_size,
             downsample_z=self.downsample_z).long()
-
-        ref_2d = pred_insts['pred_pts'].unsqueeze(2).expand(-1, -1, len(feats), -1)
-        ref_3d = self.generate_vol_ref_pts_from_masks(
-            pred_insts['pred_boxes'], pred_masks,
-            vol_pts).unsqueeze(2) if pred_masks else self.generate_vol_ref_pts_from_pts(
-                pred_insts['pred_pts'], vol_pts).unsqueeze(2)
         ref_pix = (torch.flip(projected_pix, dims=[-1]) + 0.5) / torch.tensor(
             self.image_shape).to(projected_pix)
         ref_pix = torch.flip(ref_pix, dims=[-1])
-        ref_vox = nchw_to_nlc(self.voxel_grid.unsqueeze(0)).unsqueeze(2)
 
+        ## Reshape for Multi-View condition
+        vol_pts = vol_pts.reshape(bs, -1, vol_pts.shape[-1])   # bs, 1600*900*ncam, 3
+        ref_pix = ref_pix.reshape(bs, -1, ref_pix.shape[-2], ref_pix.shape[-1])  # bs, ncam, x*y*z, 2
+        fov_mask = fov_mask.reshape(bs, -1, fov_mask.shape[-1])  # bs, ncam, x*y*z
+
+        ref_2d = pred_insts['pred_pts'].unsqueeze(2).expand(-1, -1, len(feats), -1)  # bs, 50*ncam, len(feats), 2
+        ref_3d = self.generate_vol_ref_pts_from_masks(
+            pred_insts['pred_boxes'], pred_masks,
+            vol_pts).unsqueeze(2) if pred_masks else self.generate_vol_ref_pts_from_pts(
+                pred_insts['pred_pts'].reshape(bs, -1, pred_insts['pred_pts'].shape[-1]), vol_pts).unsqueeze(2)
+        ref_vox = nchw_to_nlc(self.voxel_grid.unsqueeze(0)).expand(bs, -1, -1).unsqueeze(2)
         scene_embed = self.scene_embed.weight.repeat(bs, 1, 1)
         scene_pos = self.scene_pos().repeat(bs, 1, 1)
-        scene_embed = self.voxel_proposal(scene_embed, feats, scene_pos, vol_pts, ref_pix)
+        scene_embed = self.voxel_proposal(scene_embed, feats, scene_pos, vol_pts, ref_pix, fov_mask)
         scene_pos = nlc_to_nchw(scene_pos, self.scene_shape)
 
         outs = []
@@ -230,7 +265,9 @@ class SymphoniesDecoder(nn.Module):
         pred_pts = pred_pts * torch.tensor(self.image_shape[::-1]).to(pred_pts)
         pred_pts = pred_pts.long()
         pred_pts = pred_pts[..., 1] * self.image_shape[1] + pred_pts[..., 0]
-        assert pred_pts.size(0) == 1
-        ref_pts = vol_pts[:, pred_pts.squeeze()]
+        #assert pred_pts.size(0) == 1
+        ref_pts = torch.stack([vol_pts[i, pred_pts[i]] for i in range(len(pred_pts))])
+        # ref_pts = vol_pts[:, pred_pts.squeeze()]
         ref_pts = ref_pts / (torch.tensor(self.scene_shape) - 1).to(pred_pts)
         return ref_pts.clamp(0, 1)
+    
