@@ -83,6 +83,12 @@ class LitModule(L.LightningModule):
                 sync_dist=True)
         evaluator.reset()
 
+    def backward(self, loss, *args, **kwargs):
+        if self._fabric:
+            self._fabric.backward(loss, *args, **kwargs)
+        else:
+            loss.backward(*args, **kwargs)
+
     def configure_optimizers(self):
         optimizer_cfg = self.optimizer
         scheduler_cfg = self.scheduler
@@ -96,8 +102,9 @@ class LitModule(L.LightningModule):
                 in_param_group = False
                 for i, pg_cfg in enumerate(paramwise_cfg):
                     if 'name' in pg_cfg and pg_cfg.name in k:
-                        pgs[i].append(v)
-                        in_param_group = True
+                        if v.requires_grad:
+                            pgs[i].append(v)
+                            in_param_group = True
                     # USER: Customize more cfgs if needed
                 if not in_param_group:
                     params.append(v)
@@ -110,7 +117,8 @@ class LitModule(L.LightningModule):
                 if 'lr_mult' in pg_cfg:
                     cfg['lr'] = optimizer_cfg.lr * pg_cfg.lr_mult
                 # USER: Customize more cfgs if needed
-                optimizer.add_param_group({'params': pg, **cfg})
+                if pg:
+                    optimizer.add_param_group({'params': pg, **cfg})
         scheduler = build_from_configs(optim.lr_scheduler, scheduler_cfg, optimizer=optimizer)
         if 'interval' in scheduler_cfg:
             scheduler = {'scheduler': scheduler, 'interval': scheduler_cfg.interval}
