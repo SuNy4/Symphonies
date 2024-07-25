@@ -101,18 +101,19 @@ class SymphoniesLayer(nn.Module):
             scene_embed = index_fov_back_to_voxels(scene_embed, scene_embed_fov, fov_mask)
 
         scene_embed_flatten, scene_shape = flatten_multi_scale_feats([scene_embed])
-        if not self.query_update:
-            return scene_embed, inst_queries
+        # if not self.query_update:
+        #     return scene_embed, inst_queries
 
-        inst_queries = self.query_scene_cross_deform_attn(
-            inst_queries,
-            scene_embed_flatten,
-            query_pos=inst_pos,
-            ref_pts=torch.flip(ref_3d, dims=[-1]),
-            spatial_shapes=scene_shape,
-            level_start_index=scene_level_index)
-        inst_queries = self.query_self_attn(inst_queries, query_pos=inst_pos)
-        
+        if self.query_update:
+            inst_queries = self.query_scene_cross_deform_attn(
+                inst_queries,
+                scene_embed_flatten,
+                query_pos=inst_pos,
+                ref_pts=torch.flip(ref_3d, dims=[-1]),
+                spatial_shapes=scene_shape,
+                level_start_index=scene_level_index)
+            inst_queries = self.query_self_attn(inst_queries, query_pos=inst_pos)
+            
         # Reshape instance quries bs*ncam, # of queries, embed_dim
         if ncam > 1:
             inst_queries = inst_queries.reshape(-1, n_inst_que, inst_queries.shape[-1])
@@ -141,6 +142,7 @@ class SymphoniesDecoder(nn.Module):
             self.ori_scene_shape = copy.copy(scene_shape)
             scene_shape[-1] //= downsample_z
         self.scene_shape = scene_shape
+        self.num_layers = num_layers
         self.num_queries = cumprod(scene_shape)
         self.image_shape = image_shape
         self.voxel_size = voxel_size * project_scale
@@ -221,17 +223,25 @@ class SymphoniesDecoder(nn.Module):
         ref_vox = nchw_to_nlc(self.voxel_grid.unsqueeze(0)).expand(bs, -1, -1).unsqueeze(2)
         scene_embed = self.scene_embed.weight.repeat(bs, 1, 1)
         scene_pos = self.scene_pos().repeat(bs, 1, 1)
+        ####################################################################
+        # encoder1_memory = torch.cuda.memory_allocated() / 1024**2
         scene_embed = self.voxel_proposal(scene_embed, feats, scene_pos, vol_pts, ref_pix, fov_mask)
+        # encoder2_memory = torch.cuda.memory_allocated() / 1024**2
+        # print(f"Voxel Proposal Layer: {(encoder2_memory - encoder1_memory):.2f} MB")
+        ######################################################################
         scene_pos = nlc_to_nchw(scene_pos, self.scene_shape)
 
         outs = []
         for i, layer in enumerate(self.layers):
+            # encoder1_memory = torch.cuda.memory_allocated() / 1024**2
             scene_embed, inst_queries = layer(scene_embed, inst_queries, feats, scene_pos, inst_pos,
                                               ref_2d, ref_3d, ref_vox, fov_mask)
-            if i == 2:
+            if i == (self.num_layers+1)//2:
                 scene_embed = self.aspp(scene_embed)
             if self.training or i == len(self.layers) - 1:
                 outs.append(self.cls_head(scene_embed))
+            # encoder2_memory = torch.cuda.memory_allocated() / 1024**2
+            # print(f"Decoder Layer {i}: {(encoder2_memory - encoder1_memory):.2f} MB")
         return outs
 
     def generate_vol_ref_pts_from_masks(self, pred_boxes, pred_masks, vol_pts):
