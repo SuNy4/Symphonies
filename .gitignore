@@ -130,3 +130,7 @@ dmypy.json
 
 outputs/
 work_dirs/
+
+maskdino/maskdino_r50_50e_300q_panoptic_pq53.0.pth
+/data
+/.vscode
