@@ -52,13 +52,12 @@ class Symphonies(nn.Module):
         #])
             
     def forward(self, inputs):
-                #self.transforms = transforms.Compose([
-        to_pil = transforms.ToPILImage(),  # Convert numpy array to PIL image
-        resize = transforms.Resize((800, 800)),  # Resize image
-        tensor = transforms.ToTensor()  # Convert PIL image to PyTorch tensor and normalize
-        #])
+        #         #self.transforms = transforms.Compose([
+        # to_pil = transforms.ToPILImage(),  # Convert numpy array to PIL image
+        # resize = transforms.Resize((800, 800)),  # Resize image
+        # tensor = transforms.ToTensor()  # Convert PIL image to PyTorch tensor and normalize
+        # #])
         # For NuScenes Occ3D
-        model_memory = torch.cuda.memory_allocated() / 1024**2
         if inputs['cam_channels']:
             # pred_insts = []
             # pred_masks = []
@@ -113,10 +112,9 @@ class Symphonies(nn.Module):
 
             input_img = torch.cat(input_img, dim=0)
             # encoder1_memory = torch.cuda.memory_allocated() / 1024**2
-            # print(encoder1_memory - model_memory)
             pred_insts = self.encoder(input_img)
             # encoder2_memory = torch.cuda.memory_allocated() / 1024**2
-            # print(encoder2_memory - encoder1_memory)
+            # print(f"Encoder Layer: {(encoder2_memory - encoder1_memory):.2f} MB")
             pred_masks = pred_insts.pop('pred_masks', None)
             feats = pred_insts.pop('feats')
 
