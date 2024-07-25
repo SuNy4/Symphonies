@@ -37,7 +37,7 @@ class VoxelProposalLayer(nn.Module):
 
         val_index = []
         for ex_bs in range(bs*ncam):
-            valid_indices = torch.nonzero(proposal[ex_bs], as_tuple=False).squeeze()
+            valid_indices = torch.nonzero(proposal[ex_bs], as_tuple=False).view(-1)            
             val_index.append(valid_indices)
         max_len = max([len(view) for view in val_index])
 
@@ -94,7 +94,7 @@ class VoxelProposalLayer(nn.Module):
         pts_embed = pts_embed_cam.new_zeros(bs, voxel_size, pts_embed_cam.shape[-1])
         for batch in range(bs):
             for _ in range(ncam):
-                ### Aggregation of multi view, 어떻게 합칠건지 더 봐야함
+                ### Aggregation of multi view, Need to modify more
                 pts_embed[batch, val_index[count]] = pts_embed_cam[count, :len(val_index[count])]
                 count += 1
         assert count == bs*ncam
